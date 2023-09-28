@@ -3,7 +3,7 @@
     "baseUrl": ".",
     "jsx": "react",
     "target": "ES2019",
-    "module": "ESNext",
+    "module": "ES2022",
     "lib": [
       "ESNext",
       "DOM",
@@ -21,22 +21,10 @@
     "skipLibCheck": true,
     "allowJs": false,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true,
     "importsNotUsedAsValues": "error",
     "traceResolution": false,
     "resolveJsonModule": true,
     "useDefineForClassFields": true,
-    "paths": {
-      "*": [
-        "node_modules/*",
-        "types/*"
-      ]
-    },
-    "plugins": [
-      {
-        "name": "typescript-plugin-css-modules"
-      }
-    ]
   },
   "ts-node": {
     "transpileOnly": true,
@@ -44,17 +32,7 @@
       "module": "CommonJS"
     }
   },
-  "include": [
-    "src/**/*",
-    "types/*.d.ts",
-  ],
   "exclude": [
     "node_modules",
-    "out",
-    "dist",
-    "coverage",
-    "binaries",
-    "static",
-    "src/extensions/npm"
   ]
 }
