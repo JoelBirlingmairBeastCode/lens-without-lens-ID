@@ -1,106 +1,119 @@
-# This is a basic workflow to help you get started with Actions
+name: Build Lens
 
-name: Build For Windows
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "master" branch
-  push:
-    branches: ["stop-updating"]
-  pull_request:
-    branches: ["master"]
-
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/README.md"
+  pull_request:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
-    runs-on: windows-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+    strategy:
+      matrix:
+        os: [ windows-latest ]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 360
+    env:
+      BUILD_ID: ${{ github.run_number }}
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
+      - name: Checkout OpenLens
+        uses: actions/checkout@v3
+
+      - name: Export version to variable
+        run: echo "LENS_VERSION=$(cat version)" >> $GITHUB_ENV
+        shell: bash
+
       - uses: actions/setup-node@v3
         with:
-          node-version: 14
+          node-version: "16.x"
 
-      - name: Check node/npm version
-        run: |
-          echo "NodeJs version: "
-          node --version
-          echo "npm version: "
-          npm --version
-
-      # use npm to set up yarn
-      - name: Set up yarn cli
-        run: |
-          npm install --global yarn
-          echo "Yarn version: "
-          yarn --version
-
-      - name: Set MSVC version
-        run: npm config set msvs_version 2022
-
-      # This might be helpful for issues building node-gyp modules on Windows.
-      # - name: Set up npm Windows build tools
-      #   run: yarn install -g windows-build-tools
-
-      - name: Update node-gyp
-        run: |
-          $WhereNode = Get-Command node | Select-Object -ExpandProperty Definition
-          $NodeDirPath = Split-Path $WhereNode -Parent
-          $NodeModulesPath = $NodeDirPath + "\node_modules\npm\node_modules\npm-lifecycle"
-          cd $NodeModulesPath
-          npm install node-gyp@latest
-
-      - name: Force to latest node-gyp
-        run: |
-          npm install --global node-gyp@latest
-          npm prefix -g | % {npm config set node_gyp "$_\node_modules\node-gyp\bin\node-gyp.js"}
-
-      # install GNU make
-      - name: Install gnu make using choclatey
-        uses: crazy-max/ghaction-chocolatey@v2
+      - name: Checkout Upstream Lens
+        uses: actions/checkout@v3
         with:
-          args: install make
+          repository: lensapp/lens
+          path: lens
+          ref: v${{ env.LENS_VERSION }}
+          fetch-depth: 1
 
-      - uses: actions/checkout@v3
+      - name: Patch Upstream Lens
+        run: node update.js
 
-      # Sets up the node_modules folder with the Windows version of the dependencies
-      - name: Yarn install
-        run: yarn install --frozen-lockfile --network-timeout=100000 --no-optional
+      - name: Build Lens
+        run: |
+          npm run all:install
+          # Avoid npm install from electron-builder
+          # ref: https://github.com/electron-userland/electron-builder/blob/80a3ae857b9305aff1774e1b2b932601af50231b/packages/app-builder-lib/src/util/yarn.ts#L11-L16
+          mkdir -p open-lens/node_modules
+          
+          if [ "${CSC_LINK}" = "" ] || [ "${CSC_KEY_PASSWORD}" = "" ]; then
+            unset CSC_LINK
+            unset CSC_KEY_PASSWORD
+          fi
+          
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            npx nx run open-lens:build:app --win nsis msi portable
+          elif [ "$RUNNER_OS" == "Linux" ]; then
+            sudo apt update
+            sudo apt install gcc-aarch64-linux-gnu g++-aarch64-linux-gnu -y
+          
+            npx nx run open-lens:build:app --x64 --arm64
+            find . -name '*pty.node' -print0 | xargs -0 file
+          else
+            npx nx run open-lens:build:app --x64 --arm64
+            find . -name '*pty.node' -print0 | xargs -0 file
+          fi
+          
+          rm -f open-lens/dist/*blockmap{,*}
+        shell: bash
+        working-directory: lens
+        env:
+          APPBUNDLEID: "io.kontena.lens-app"
+          APPLEID: ${{ secrets.APPLEID }}
+          APPLEIDPASS: ${{ secrets.APPLEIDPASS }}
+          CSC_LINK: ${{ runner.os == 'macos' && secrets.CSC_LINK || secrets.CSC_LINK_WIN }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macos' && secrets.CSC_KEY_PASSWORD || secrets.CSC_KEY_PASSWORD_WIN }}
+          CSC_LINK_WIN: ${{ secrets.CSC_LINK_WIN }}
+          CSC_KEY_PASSWORD_WIN: ${{ secrets.CSC_KEY_PASSWORD_WIN }}
+          WIN_CSC_LINK: ${{ secrets.CSC_LINK_WIN }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD_WIN }}
+          CSC_FOR_PULL_REQUEST: true
+          DOWNLOAD_ALL_ARCHITECTURES: ${{ runner.os != 'Windows' }}
 
-      # Downloads kubernetes dependencies
-      - name: Download client binaries
-        run: yarn download:binaries
+      - name: Calculate SHA256 checksum
+        run: |-
+          if command -v shasum 2>/dev/null 1>&2; then
+            for filename in OpenLens*; do shasum -a 256 "${filename}" | tee "${filename}.sha256" ; done
+          else
+            for filename in OpenLens*; do certutil -hashfile "${filename}" SHA256 | tee "${filename}.sha256" ; done
+          fi
+        shell: bash
+        working-directory: lens/open-lens/dist
 
-      # Fix the version of the build
-      - name: Fix Build version
-        run: yarn run npm:fix-build-version
-
-      # Compile
-      - name: Compile
-        run: yarn run compile
-
-      # clear our pem folder before publish
-      # https://github.com/ukoloff/win-ca#clear-pem-folder-on-publish
-      # - name: Clear CA trust
-      #   run: rm -Recursive node_modules/win-ca/pem
-
-      - name: add path to msbuild
-        run: $env:Path += ";/c/Program Files/Microsoft Visual Studio/2022/Enterprise/MSBuild/Current/Bin/"
-
-      - name: Electron Builder
-        run: yarn run electron-builder --publish onTag --win --dir
-
-      # - name: Make
-      #   run: make build
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v3
+        if: github.ref != 'refs/heads/main'
         with:
-          name: built-artifacts
-          path: ./dist
+          name: OpenLens-${{ matrix.os }}
+          retention-days: 5
+          path: lens/open-lens/dist/OpenLens*${{ env.LENS_VERSION }}-${{ env.BUILD_ID }}*.*
+
+      - name: Generate Changelog
+        run: curl -s https://api.github.com/repos/lensapp/lens/releases/latest | jq -r 'select(.prerelease == false) | .body[0:]' > ${{ github.workspace }}-CHANGELOG.txt
+
+      - name: Release
+        uses: softprops/action-gh-release@v0.1.15
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: v${{ env.LENS_VERSION }}-${{ env.BUILD_ID }}
+          body_path: ${{ github.workspace }}-CHANGELOG.txt
+          files: lens/open-lens/dist/OpenLens*${{ env.LENS_VERSION }}-${{ env.BUILD_ID }}*.*
+
+      - name: Latest
+        uses: softprops/action-gh-release@v0.1.15
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: Latest
+          files: |
+            lens/open-lens/dist/OpenLens*${{ env.LENS_VERSION }}-${{ env.BUILD_ID }}*.*
+            #lens/open-lens/dist/lates*.yml
