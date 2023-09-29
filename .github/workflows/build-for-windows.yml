@@ -3,7 +3,7 @@ name: Build Lens
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [stop-updating]
     paths-ignore:
       - "**/README.md"
   pull_request:
